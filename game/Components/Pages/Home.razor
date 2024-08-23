@@ -1,0 +1,263 @@
+﻿@page "/"
+@using game.MongoDB
+@using game.Models
+@inject MongoDBService mongoDbService;
+@rendermode InteractiveServer
+
+<div class="container">
+	<div class="sidebar">
+		<h3>High Scores</h3>
+		<ul>
+			@foreach (var highScore in highScores)
+			{
+				<li>@highScore.Score   --- <span>@highScore.Name</span></li>
+			}
+		</ul>
+	</div>
+
+	<div class="game-container">
+		<div @ref="gameArea" tabindex="0" @onkeydown="ChangeDirection" class="game-area">
+			@for (int i = 0; i < segments.Count; i++)
+			{
+				if (i == 0)
+				{
+					<div class="snake-head" style="top:@($"{segments[i].Y}px"); left:@($"{segments[i].X}px");"></div>
+				}
+				else
+				{
+					<div class="segment" style="top:@($"{segments[i].Y}px"); left:@($"{segments[i].X}px");"></div>
+				}
+			}
+			<div class="food" style="top:@($"{foodY}px"); left:@($"{foodX}px");"></div>
+		</div>
+
+		<button @onclick="StartGame" class="start-button">Start Game</button>
+		<p class="message">@message</p>
+		<p class="score">Points: @score</p>
+	</div>
+
+	<div class="form-container">
+		<h3>Save High Score</h3>
+		<EditForm Model="@newHighScore" OnValidSubmit="HandleValidSubmit">
+			<DataAnnotationsValidator/>
+			<div>
+				<label for="name">Name:</label>
+				<InputText id="name" @bind-Value="newHighScore.Name"/>
+				<ValidationMessage For="@(() => newHighScore.Name)"/>
+			</div>
+			<button type="submit">Save Score</button>
+		</EditForm>
+        <p class="message"><br /><br /><strong>How to play:</strong><br/> Turn left with "LEFT ARROW", turn right with "RIGHT ARROW", avoid yourself and the border and eat as much food as you can!</p>
+	</div>
+</div>
+
+@code {
+
+	private List<HighScore> highScores = new();
+	private HighScore newHighScore = new HighScore();
+
+
+    private ElementReference gameArea;
+    private List<Segment> segments = new List<Segment>();
+    private int playerX = 0;
+    private int playerY = 0;
+    private int foodX;
+    private int foodY;
+    private Timer _moveTimer;
+    private string _currentDirection = "Right";
+    private bool gameStarted = false;
+    private string message = string.Empty;
+    private int score = 0;
+
+    protected override async Task OnInitializedAsync()
+    {
+	    highScores = await mongoDbService.GetScoresAsync();
+
+    }
+
+    private async void StartGame()
+    {
+        if (!gameStarted)
+        {
+            gameStarted = true;
+            message = string.Empty;
+            score = 0; 
+
+            segments.Clear();
+            for (int i = 0; i < 3; i++)
+            {
+                segments.Add(new Segment { X = playerX - i * 30, Y = playerY });
+            }
+
+            PlaceFood();
+
+            _moveTimer = new Timer(MovePlayer, null, 0, 100);
+
+            await gameArea.FocusAsync();
+        }
+    }
+
+    private async Task HandleValidSubmit()
+    {
+	    newHighScore.Score = score;
+	    await mongoDbService.AddHighScoreAsync(newHighScore);
+
+
+	    highScores = await mongoDbService.GetScoresAsync();
+
+        
+        StateHasChanged();
+    }
+    private void ChangeDirection(KeyboardEventArgs e)
+    {
+        if (!gameStarted) return;
+
+        switch (e.Key)
+        {
+            case "ArrowLeft":
+                TurnLeft();
+                break;
+            case "ArrowRight":
+                TurnRight();
+                break;
+        }
+    }
+
+    private void TurnLeft()
+    {
+        _currentDirection = _currentDirection switch
+        {
+            "Right" => "Up",
+            "Left" => "Down",
+            "Up" => "Left",
+            "Down" => "Right",
+            _ => _currentDirection
+        };
+    }
+
+    private void TurnRight()
+    {
+        _currentDirection = _currentDirection switch
+        {
+            "Right" => "Down",
+            "Left" => "Up",
+            "Up" => "Right",
+            "Down" => "Left",
+            _ => _currentDirection
+        };
+    }
+
+    private void MovePlayer(object state)
+    {
+        InvokeAsync(() =>
+        {
+            if (!gameStarted) return;
+
+            var newSegments = new List<Segment>(segments.Count);
+
+            for (int i = 0; i < segments.Count; i++)
+            {
+                if (i == 0)
+                {
+                    switch (_currentDirection)
+                    {
+                        case "Left":
+                            playerX = Math.Max(0, playerX - 30);
+                            break;
+                        case "Right":
+                            playerX = Math.Min(570, playerX + 30);
+                            break;
+                        case "Up":
+                            playerY = Math.Max(0, playerY - 30);
+                            break;
+                        case "Down":
+                            playerY = Math.Min(570, playerY + 30);
+                            break;
+                    }
+                }
+                newSegments.Add(new Segment { X = segments[i].X, Y = segments[i].Y });
+            }
+
+            for (int i = segments.Count - 1; i > 0; i--)
+            {
+                segments[i].X = newSegments[i - 1].X;
+                segments[i].Y = newSegments[i - 1].Y;
+            }
+
+            if (segments.Count > 0)
+            {
+                segments[0].X = playerX;
+                segments[0].Y = playerY;
+            }
+
+            if (CheckCollision())
+            {
+                EndGame("You crashed, Game Over!");
+                return;
+            }
+
+            CheckForFoodCollision();
+
+            StateHasChanged();
+        });
+    }
+
+    private bool CheckCollision()
+    {
+        if (playerX < 0 || playerX >= 600 || playerY < 0 || playerY >= 600)
+        {
+            return true;
+        }
+
+        for (int i = 1; i < segments.Count; i++)
+        {
+            if (segments[i].X == playerX && segments[i].Y == playerY)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private void CheckForFoodCollision()
+    {
+        if (playerX == foodX && playerY == foodY)
+        {
+	        segments.Add(new Segment { X = segments.Last().X, Y = segments.Last().Y });
+
+            score += 10;
+
+            PlaceFood();
+        }
+    }
+
+    private void PlaceFood()
+    {
+        var random = new Random();
+        int x = random.Next(0, 600 / 30) * 30;
+        int y = random.Next(0, 600 / 30) * 30;
+
+        while (segments.Any(s => s.X == x && s.Y == y))
+        {
+            x = random.Next(0, 600 / 30) * 30;
+            y = random.Next(0, 600 / 30) * 30;
+        }
+
+        foodX = x;
+        foodY = y;
+    }
+
+    private void EndGame(string endMessage)
+    {
+        gameStarted = false;
+        _moveTimer?.Dispose();
+        message = endMessage;
+    }
+
+    public void Dispose()
+    {
+        _moveTimer?.Dispose();
+    }
+}
+

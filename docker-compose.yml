@@ -1,0 +1,24 @@
+version: '3.8'
+
+services:
+  mongodb:
+    image: mongo:latest
+    hostname: mongodb
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongo-data:/data/db
+
+  blazorapp:
+    build: .
+    hostname: blazorapp
+    environment:
+      MONGO_DB_CONNECTION: "mongodb://mongodb:27017"
+      ASPNETCORE_ENVIRONMENT: "Development"
+    ports:
+      - "8080:8080" # Map port 8080 of the host to port 80 in the container
+    depends_on:
+      - mongodb
+
+volumes:
+  mongo-data:
